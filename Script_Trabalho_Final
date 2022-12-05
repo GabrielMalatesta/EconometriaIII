@@ -1,0 +1,54 @@
+
+rm(list=ls())
+
+##Código para carregar pacotes checando se já estão instalados
+
+# Pacotes usados
+packages <- c("readxl", "httr")
+
+# Instalando pacotes ainda não instalados
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Carregando os pacotes
+invisible(lapply(packages, library, character.only = TRUE))
+
+## Baixando a base de dados do meu repositório no Github
+github_link <- "https://github.com/GabrielMalatesta/EconometriaIII/blob/main/df_projeto.xlsx?raw=true"
+
+temp_file <- tempfile(fileext = ".xlsx")
+req <- GET(github_link, 
+           # authenticate using GITHUB_PAT
+           authenticate(Sys.getenv("GITHUB_PAT"), ""),
+           # write result to disk
+           write_disk(path = temp_file))
+df_raw <- read_excel(temp_file)
+
+## Arrumando a base de dados
+
+names <- c("Data", "PEA", "PO", "PD", "TD",
+           "Credito", "PMC", "PMS", "PIM", "IPCA",
+           "IBCBR", "Selic", "Anfavea", "Cambio")
+           
+#Renomeando as colunas e limpando a primeira linha           
+df_projeto <- df_raw[-1,]
+colnames(df_projeto) <- names
+
+#Transformando valores dos dados em numeric
+df_projeto <- lapply(df_projeto, as.numeric)
+
+#Transformando a série da População Ocupada em time-series (série acabando de dez/2019)
+PO <- ts(df_projeto$PO[-seq(from=95, to=length(df_projeto$PO), by=1)], 
+         start = c(2012,3), 
+         frequency = 12)
+
+#Visualizando a série da População Ocupada
+ts.plot(PO, ylab = "População Ocupada", xlab= "Ano")
+
+#Identificando a sazonalidade da série
+monthplot(PO)
+
+#Decompondo os componetes não observados
+plot(decompose(PO))
