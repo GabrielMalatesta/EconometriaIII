@@ -1,10 +1,22 @@
 
+---
+title: "Trabalho Final de Econometria III"
+author: "Gabriel Livoneze Malatesta"
+date: "10/12/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
 rm(list=ls())
 
 ##Código para carregar pacotes checando se já estão instalados
 
 # Pacotes usados
-packages <- c("readxl", "httr")
+packages <- c("readxl", "httr", "tseries", "forecast", "lmtest", "ggplot2", "ggpubr", "urca", "BETS")
 
 # Instalando pacotes ainda não instalados
 installed_packages <- packages %in% rownames(installed.packages())
@@ -36,19 +48,191 @@ names <- c("Data", "PEA", "PO", "PD", "TD",
 df_projeto <- df_raw[-1,]
 colnames(df_projeto) <- names
 
-#Transformando valores dos dados em numeric
-df_projeto <- lapply(df_projeto, as.numeric)
+#Transformando valores dos dados em numeric e arrumando a data
+df_projeto <-as.data.frame(lapply(df_projeto, as.numeric))
+df_projeto$Data<-as.Date(paste0(df_projeto$Data,"01"),  format="%Y%m%d")
 
 #Transformando a série da População Ocupada em time-series (série acabando de dez/2019)
 PO <- ts(df_projeto$PO[-seq(from=95, to=length(df_projeto$PO), by=1)], 
          start = c(2012,3), 
          frequency = 12)
 
-#Visualizando a série da População Ocupada
-ts.plot(PO, ylab = "População Ocupada", xlab= "Ano")
+```
 
-#Identificando a sazonalidade da série
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, fig.align = 'center', fig.fullwidth = TRUE}
+PO_plot <- ggplot(df_projeto, aes(x=as.Date(Data), y=(PO/1000))) +
+  geom_line()+
+  labs(x=element_blank(), 
+       title = "População Ocupada",
+       subtitle= "milhões de pessoas")+
+  theme_classic() +
+  theme(plot.title = element_text(size=14, face="bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust=0.5),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle=90, hjust=1))+
+  scale_x_date(limits = as.Date(c("2012-03-01", "2019-12-01")),
+               breaks = "6 months", 
+               date_labels="%b/%y")
+ggarrange(PO_plot, ncol=1, nrow=1)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, fig.align = 'center', fig.fullwidth = TRUE}
 monthplot(PO)
-
-#Decompondo os componetes não observados
 plot(decompose(PO))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, fig.align = 'center', fig.fullwidth = TRUE}
+par(mfrow=c(1,2))
+acf(PO, lag.max = 48)
+pacf(PO, lag.max = 48)
+po_trend <- ur.df(PO, type = c("trend"), lags=12, selectlags = "AIC")
+po_drift <- ur.df(PO, type = c("drift"), lags=12, selectlags = "AIC")
+po_none <- ur.df(PO, type = c("none"), lags=12,  selectlags = "AIC")
+
+tabela_po_trend <- cbind(as.vector(po_trend@teststat), po_trend@cval)
+tabela_po_drift <- cbind(as.vector(po_drift@teststat), po_drift@cval)
+tabela_po_none <- cbind(as.vector(po_none@teststat), po_none@cval)
+```
+
+```{r}
+tabela_po_trend
+tabela_po_drift
+tabela_po_none
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, fig.align = 'center', fig.fullwidth = TRUE}
+#Diferenciando
+par(mfrow=c(1,2))
+PO <- log(PO)
+diff_PO <- diff(PO)
+acf(diff_PO, lag.max=48)
+pacf(diff_PO, lag.max=48)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, fig.align = 'center', fig.fullwidth = TRUE}
+par(mfrow=c(1,2))
+diff_PO_s <- diff(diff_PO, 12)
+acf(diff_PO_s, lag.max=48)
+pacf(diff_PO_s, lag.max=48)
+
+diff_po_trend <- ur.df(diff_PO_s, type = c("trend"), lags = 12, selectlags = "AIC")
+diff_po_drift <- ur.df(diff_PO_s, type = c("drift"), lags = 12, selectlags = "AIC")
+diff_po_none <- ur.df(diff_PO_s, type = c("none"), lags = 12,  selectlags = "AIC")
+
+tabela_diff_po_trend <- cbind(as.vector(diff_po_trend@teststat), diff_po_trend@cval)
+tabela_diff_po_drift <- cbind(as.vector(diff_po_drift@teststat), diff_po_drift@cval)
+tabela_diff_po_none <- cbind(as.vector(diff_po_none@teststat), diff_po_none@cval)
+```
+
+```{r}
+tabela_diff_po_trend
+tabela_diff_po_drift
+tabela_diff_po_none
+#sem drift e sem tendencia deu significativo
+```
+
+```{r}
+#Identificação
+
+par(mfrow=c(2,2))
+acf(diff_PO, lag.max=48)
+pacf(diff_PO, lag.max=48)
+acf(diff_PO_s, lag.max=48)
+pacf(diff_PO_s, lag.max=48)
+
+#Corte no ACF sugere presença de média móvel
+```
+
+
+```{r}
+auto.arima(PO)
+#lembrando que nesta varíavel "PO" foi aplicado o operador log
+#autoarima retorna um SARIMA (1,1,0)(2,1,0)[12]
+#Vamos testar tanto o modelo recomendado pelo auto.arima quanto um modelo incorporando a presença de média móvel
+```
+
+
+```{r}
+#SARIMA (1,1,0)(2,1,0)[12]
+fit1.sarima <- Arima(PO, order = c(1,1,0), seasonal = c(2,1,0))
+fit1.sarima
+
+BETS::t_test(fit1.sarima, alpha = 0.05)
+```
+
+```{r}
+#SARIMA (1,1,1)(2,1,1)[12]
+fit2.sarima <- Arima(PO, order = c(1,1,1), seasonal = c(2,1,1))
+fit2.sarima
+
+BETS::t_test(fit2.sarima, alpha = 0.05)
+```
+
+```{r}
+#SARIMA (1,1,0)(2,1,1)[12]
+fit3.sarima <- Arima(PO, order = c(1,1,0), seasonal = c(2,1,1))
+fit3.sarima
+
+BETS::t_test(fit3.sarima, alpha = 0.05)
+```
+
+```{r}
+#SARIMA (1,1,0)(2,1,1)[12]
+fit4.sarima <- Arima(PO, order = c(1,1,1), seasonal = c(2,1,0))
+fit4.sarima
+
+BETS::t_test(fit4.sarima, alpha = 0.05)
+```
+
+#melhor modelo: SARIMA (1,1,0)(2,1,0)[12]
+
+#Diagnóstico
+
+#Visualização dos Resíduos
+
+```{r}
+plot(fit1.sarima$residuals)
+tsdiag(fit1.sarima, gof.lag = 30)
+# Note que os resíduos parecem estar simetricamente distribuídos em torno da média zero (e sem outliers), o que é um indicativo de normalidade.
+# na FAC, não vemos nenhum lag significante, indicando que toda a parte linear foi capturada pelo modelo SARIMA(0,1,1)(0,1,1)
+# Já no terceiro gráfico, não rejeitamos a H0 de não existência de dependência serial para todas as defasagens.
+```
+
+```{r}
+# Primeiro, vamos testar a autocorrelação linear dos resíduos através do teste Ljung-Box:
+
+Box.test(fit1.sarima$residuals, lag = 24, type ='Ljung-Box', fitdf =3)
+
+# H0: não existência de autocorrelação serial (até o lag selecionado)
+
+# fitdf = number of degrees of freedom to be subtracted - Neste caso igual a 3 (p+q+P+Q), pois o teste é feito nos resíduos de um modelo SARIMA com dois parâmetros
+
+
+```
+
+```{r}
+# Agora, vamos verificar a normalidade dos resíduos
+
+hist(fit1.sarima$residuals)
+shapiro <- shapiro.test(fit1.sarima$residuals)
+shapiro
+jarque.bera <- jarque.bera.test(fit1.sarima$residuals) # não rejeitamos com 10%, por exemplo
+jarque.bera
+# de maneira geral, não rejeitamos a hipotese nula de normalidade. 
+```
+
+## 5. Previsão 
+
+```{r}
+# Após concluirmos que estamos modelando toda a parte linear da série de tempo, podemos fazer previsões
+
+previsão <- forecast::forecast(object = fit1.sarima, h=12, level=0.95)
+plot(previsão)
+
+# um jeito de verificar se essa previsão é boa é aplicar algumas métricas de accuracy - quanto menor, melhor.
+
+accuracy(fit1.sarima)
+
+# Obs: uma análise da previsão fora da amostra seria importante para confirmar a performance do modelo.
+```
+
